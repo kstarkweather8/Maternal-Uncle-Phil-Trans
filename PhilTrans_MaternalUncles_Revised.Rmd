@@ -1,0 +1,444 @@
+---
+title: "PhilTrans_MaternalUncles"
+author: "MHKeith"
+date: "October 12, 2018"
+output: html_document
+---
+
+Load packages, data, and run summary statistics for Table 1. 
+
+```{r setupstats}
+
+#load file "ShodagorMatUncleDat.csv" from working directory
+MUDat<-read.csv("ShodagorMatUncleDat.csv")
+
+#summary stats for numerical variables, Table 1A
+stats1A<-apply(MUDat[ ,c(2,4,7,18,20,22,25,27,29,31,33,35)],2,summary)
+Tab1A<-t(stats1A)
+Tab1ASD<-data.frame(apply(MUDat[ ,c(2,4,7,18,20,22,25,27,29,31,33,35)],2,sd))
+colnames(Tab1ASD)<-"SD"
+Table1A<-cbind(Tab1A,Tab1ASD)
+
+#summary stats for dummy variables, Table 1B
+Tab1B<-apply(MUDat[ ,c(6,39,40,9,10,11,12,13,14,16,15,17,24)],2,table)
+Table1B<-t(Tab1B)
+colnames(Table1B)<-c("No", "Yes")
+
+```
+
+Screen predictors in clusters, and retain variables with 90% credible intervals that do not span zero for final models. 
+
+```{r predscreen}
+
+library(doParallel)
+library(MCMCglmm)
+
+#clusters A-E, screen separately
+
+cl <- makeCluster(3) #3 models, run them in parallel on 3 cores
+registerDoParallel(cl)
+
+#use fixed prior on residuals (unidientifiable in logit models)- list R
+#use regularizing prior on fixed effects to prevent overfitting- list B
+
+priorA <- list(R = list(V = 1, fix=1),
+               B = list(mu = c(rep(0,8)), V = diag(8)*(4.3+pi^2/3)))
+
+#Cluster A
+system.time(modsA <- foreach(i=1:3) %dopar% {
+  library(MCMCglmm)
+    forml<-list(as.formula(MU_InvestAny ~ Z_MOAge +IncomeLog +Boat_dum + MatRes + PatRes + OthRes + Z_AnnMove + 1), 
+                as.formula(MU_Direct ~ Z_MOAge +IncomeLog+Boat_dum + MatRes + PatRes + OthRes + Z_AnnMove  + 1), 
+                as.formula(MU_Indirect_dum ~ Z_MOAge +IncomeLog+Boat_dum + MatRes + PatRes + OthRes + Z_AnnMove + 1))
+
+    MCMCglmm( forml[[i]],
+        data=MUDat,
+        prior=priorA,
+        family='categorical',
+        nitt = 1100000, thin = 1000, burnin = 100000,
+        pl=TRUE, pr=TRUE,
+        verbose=FALSE)
+})
+
+
+# function for marginal R2 from MCMCglmm models
+mcmcR2 <- function(m){
+    X <- as.matrix(m$X)
+    sigF <- apply(m$Sol[,1:ncol(X)], 1, function(z) var(as.vector(z %*% t(X))) )
+    R2m <- sigF / ( sigF + rowSums(m$VCV) )
+    if(ncol(m$VCV)==2){nv<-m$VCV[,-which(colnames(m$VCV)=="units")]}
+    else{nv<-rowSums(m$VCV[,-which(colnames(m$VCV)=="units")])}
+    outmc <- matrix(NA,nrow=length(sigF),ncol=2)
+    outmc[,1] <- sigF
+    outmc[,2] <- R2m
+    colnames(outmc) <- c("sigF","R2m")
+    class(outmc) <- "mcmc"
+    attr(outmc,"mcpar") <- attr(m$Sol,"mcpar")
+    return( outmc )
+}
+
+AnyA<-modsA[[1]]
+summary(AnyA)
+anyAresults<-data.frame(posterior.mode(AnyA$Sol), HPDinterval(AnyA$Sol,prob=0.90))
+#retain boat dummy
+
+DirA<-modsA[[2]]
+summary(DirA)
+dirAresults<-data.frame(posterior.mode(DirA$Sol), HPDinterval(DirA$Sol,prob=0.90))
+#retain number of annual movements, boat dummy 
+
+IndA<-modsA[[3]]
+summary(IndA)
+indAresults<-data.frame(posterior.mode(IndA$Sol), HPDinterval(IndA$Sol,prob=0.90))
+
+#R2 A cluster
+R2A<-as.data.frame(lapply(modsA,mcmcR2)) 
+names(R2A)<-c("sigFany", "R2many","sigFdir","R2mdir","sigFind","R2mind") 
+anyR2Amode<-posterior.mode(R2A$R2many) #marginal R2 posterior mode for "any" model
+anyR2ACI<-quantile(R2A$R2many,c(.10,.90)) #marginal R2 90% credible interval for "any" model
+dirR2Amode<-posterior.mode(R2A$R2mdir) #direct mode
+dirR2ACI<-quantile(R2A$R2mdir,c(.10,.90)) #direct CI
+indR2Amode<-posterior.mode(R2A$R2mind) #indirect mode
+indR2ACI<-quantile(R2A$R2mind,c(.10,.90)) #indirect CI
+
+#Cluster B
+priorB<- list(R = list(V = 1, fix=1),
+               B = list(mu = c(rep(0,5)), V = diag(5)*(4.3+pi^2/3)))
+  
+system.time(modsB <- foreach(i=1:3) %dopar% {
+  library(MCMCglmm)
+    forml<-list(as.formula(MU_InvestAny ~ Z_MOAge + IncomeLog+ MOEdu_dum + IncomeLog + MOSells_Occup + 1), 
+                as.formula(MU_Direct ~ Z_MOAge + IncomeLog+MOEdu_dum + IncomeLog + MOSells_Occup + 1), 
+                as.formula(MU_Indirect_dum ~ Z_MOAge + IncomeLog+MOEdu_dum + IncomeLog + MOSells_Occup + 1))
+
+    MCMCglmm( forml[[i]],
+        data=MUDat,
+        prior=priorB,
+        family='categorical',
+        nitt = 1100000, thin = 1000, burnin = 100000,
+        pl=TRUE, pr=TRUE,
+        verbose=FALSE)
+})
+
+AnyB<-modsB[[1]]
+summary(AnyB)
+anyBresults<-data.frame(posterior.mode(AnyB$Sol), HPDinterval(AnyB$Sol,prob=0.90))
+#retain mother's occupation
+
+DirB<-modsB[[2]]
+summary(DirB)
+dirBresults<-data.frame(posterior.mode(DirB$Sol), HPDinterval(DirB$Sol,prob=0.90))
+#retain mother's occupation
+
+IndB<-modsB[[3]]
+summary(IndB)
+indBresults<-data.frame(posterior.mode(IndB$Sol), HPDinterval(IndB$Sol,prob=0.90))
+
+#R2 B cluster
+R2B<-as.data.frame(lapply(modsB, mcmcR2))
+names(R2B)<-c("sigFany", "R2many","sigFdir","R2mdir","sigFind","R2mind") 
+anyR2Bmode<-posterior.mode(R2B$R2many) #any mode
+anyR2BCI<-quantile(R2B$R2many,c(.10,.90)) #any CI
+dirR2Bmode<-posterior.mode(R2B$R2mdir) #direct mode
+dirR2BCI<-quantile(R2B$R2mdir,c(.10,.90)) #direct CI
+indR2Bmode<-posterior.mode(R2B$R2mind) #indirect mode
+indR2BCI<-quantile(R2B$R2mind,c(.10,.90)) #indirect CI
+
+#Cluster C
+priorC<- list(R = list(V = 1, fix=1),
+               B = list(mu = c(rep(0,5)), V = diag(5)*(4.3+pi^2/3)))
+
+system.time(modsC <- foreach(i=1:3) %dopar% {
+    library(MCMCglmm)
+    forml<-list(as.formula(MU_InvestAny ~ Z_MOAge + IncomeLog+ MONum_Marriages + FatherPresent + 1), 
+                as.formula(MU_Direct ~ Z_MOAge + IncomeLog+ MONum_Marriages + FatherPresent + 1), 
+                as.formula(MU_Indirect_dum ~ Z_MOAge + IncomeLog+ MONum_Marriages + FatherPresent + 1))
+
+    MCMCglmm( forml[[i]],
+        data=MUDat,
+        prior=priorC,
+        family='categorical',
+        nitt = 1100000, thin = 1000, burnin = 100000,
+        pl=TRUE, pr=TRUE,
+        verbose=FALSE)
+})
+
+AnyC<-modsC[[1]]
+summary(AnyC)
+anyCresults<-data.frame(posterior.mode(AnyC$Sol), HPDinterval(AnyC$Sol,prob=0.90))
+
+DirC<-modsC[[2]]
+summary(DirC)
+dirCresults<-data.frame(posterior.mode(DirC$Sol), HPDinterval(DirC$Sol,prob=0.90))
+
+IndC<-modsC[[3]]
+summary(IndC)
+indCresults<-data.frame(posterior.mode(IndC$Sol), HPDinterval(IndC$Sol,prob=0.90))
+
+#R2 C cluster
+R2C<-as.data.frame(lapply(modsC, mcmcR2))
+names(R2C)<-c("sigFany", "R2many","sigFdir","R2mdir","sigFind","R2mind") 
+anyR2Cmode<-posterior.mode(R2C$R2many) #any mode
+anyR2CCI<-quantile(R2C$R2many,c(.10,.90)) #any CI
+dirR2Cmode<-posterior.mode(R2C$R2mdir) #direct mode
+dirR2CCI<-quantile(R2C$R2mdir,c(.10,.90)) #direct CI
+indR2Cmode<-posterior.mode(R2C$R2mind) #indirect mode
+indR2CCI<-quantile(R2C$R2mind,c(.10,.90)) #indirect CI
+
+
+#Cluster D
+priorD <- list(R = list(V = 1, fix=1),
+               B = list(mu = c(rep(0,7)), V = diag(7)*(4.3+pi^2/3))) 
+
+system.time(modsD <- foreach(i=1:3) %dopar% {
+  library(MCMCglmm)
+    forml<-list(as.formula(MU_InvestAny ~ Z_MOAge + IncomeLog+ Z_MO_NumCldLiv + Z_MO_AgeFirstBirth + MO_LostChild_dum + Z_IBI_AfterFirst + 1), 
+                as.formula(MU_Direct ~ Z_MOAge + IncomeLog+ Z_MO_NumCldLiv + Z_MO_AgeFirstBirth + MO_LostChild_dum + Z_IBI_AfterFirst + 1), 
+                as.formula(MU_Indirect_dum ~ Z_MOAge + IncomeLog+ Z_MO_NumCldLiv + Z_MO_AgeFirstBirth + MO_LostChild_dum + Z_IBI_AfterFirst + 1))
+
+    MCMCglmm( forml[[i]],
+        data=MUDat,
+        prior=priorD,
+        family='categorical',
+        nitt = 1100000, thin = 1000, burnin = 100000,
+        pl=TRUE, pr=TRUE,
+        verbose=FALSE)
+})
+
+AnyD<-modsD[[1]]
+summary(AnyD)
+anyDresults<-data.frame(posterior.mode(AnyD$Sol), HPDinterval(AnyD$Sol,prob=0.90))
+#retain IBI
+
+DirD<-modsD[[2]]
+summary(DirD)
+dirDresults<-data.frame(posterior.mode(DirD$Sol), HPDinterval(DirD$Sol,prob=0.90))
+
+IndD<-modsD[[3]]
+summary(IndD)
+indDresults<-data.frame(posterior.mode(IndD$Sol), HPDinterval(IndD$Sol,prob=0.90))
+#retain IBI, mother has lost a child
+
+#R2 D cluster
+R2D<-as.data.frame(lapply(modsD, mcmcR2))
+names(R2D)<-c("sigFany", "R2many","sigFdir","R2mdir","sigFind","R2mind") 
+anyR2Dmode<-posterior.mode(R2D$R2many) #any mode
+anyR2DCI<-quantile(R2D$R2many,c(.10,.90)) #any CI
+dirR2Dmode<-posterior.mode(R2D$R2mdir) #direct mode
+dirR2DCI<-quantile(R2D$R2mdir,c(.10,.90)) #direct CI
+indR2Dmode<-posterior.mode(R2D$R2mind) #indirect mode
+indR2DCI<-quantile(R2D$R2mind,c(.10,.90)) #indirect CI
+
+#Cluster E
+priorE <- list(R = list(V = 1, fix=1),  
+               B = list(mu = c(rep(0,8)), V = diag(8)*(4.3+pi^2/3))) 
+
+system.time(modsE <- foreach(i=1:3) %dopar% {
+
+    forml<-list(as.formula(MU_InvestAny ~ Z_MOAge + IncomeLog+ MO_Firstborn_dum + Z_MO_NumSibs + Z_MO_NumSisters + Z_MO_NumBro_Total + Z_MO_Num_OlderBro + Z_MO_Num_YoungBro + Z_Num_Alloparents + 1), 
+                as.formula(MU_Direct ~ Z_MOAge + IncomeLog+ MO_Firstborn_dum + Z_MO_NumSibs + Z_MO_NumSisters + Z_MO_NumBro_Total + Z_MO_Num_OlderBro + Z_MO_Num_YoungBro + Z_Num_Alloparents + 1), 
+                as.formula(MU_Indirect_dum ~ Z_MOAge + IncomeLog+ MO_Firstborn_dum + Z_MO_NumSibs + Z_MO_NumSisters + Z_MO_NumBro_Total + Z_MO_Num_OlderBro + Z_MO_Num_YoungBro + Z_Num_Alloparents + 1))
+
+    MCMCglmm( forml[[i]],
+        data=MUDat,
+        prior=priorE,
+        family='categorical',
+        nitt = 1100000, thin = 1000, burnin = 100000,
+        pl=TRUE, pr=TRUE,
+        verbose=FALSE)
+})
+
+AnyE<-modsE[[1]]
+summary(AnyE)
+anyEresults<-data.frame(posterior.mode(AnyE$Sol), HPDinterval(AnyE$Sol,prob=0.90))
+#retain mother firstborn, number of older brothers
+
+DirE<-modsE[[2]]
+summary(DirE)
+dirEresults<-data.frame(posterior.mode(DirE$Sol), HPDinterval(DirE$Sol,prob=0.90))
+#retain number of older brothers
+
+IndE<-modsE[[3]]
+summary(IndE)
+indEresults<-data.frame(posterior.mode(IndE$Sol), HPDinterval(IndE$Sol,prob=0.90))
+#retain mother firstborn 
+
+#R2 E cluster
+R2E<-as.data.frame(lapply(modsE, mcmcR2))
+names(R2E)<-c("sigFany", "R2many","sigFdir","R2mdir","sigFind","R2mind") 
+anyR2Emode<-posterior.mode(R2E$R2many) #any mode
+anyR2ECI<-quantile(R2E$R2many,c(.10,.90)) #any CI
+dirR2Emode<-posterior.mode(R2E$R2mdir) #direct mode
+dirR2ECI<-quantile(R2E$R2mdir,c(.10,.90)) #direct CI
+indR2Emode<-posterior.mode(R2E$R2mind) #indirect mode
+indR2ECI<-quantile(R2E$R2mind,c(.10,.90)) #indirect CI
+
+```
+
+Final GLMs for outcomes any investment, direct investment, and indirect investment. 
+
+```{r GLMs}
+
+#Any investment
+priorAny <- list(R = list(V = 1, fix=1),
+              B = list(mu = c(rep(0,8)), V = diag(8)*(4.3+pi^2/3)))
+
+system.time(Any <- {
+  library(MCMCglmm)
+
+    forml<-as.formula(MU_InvestAny ~ Z_MOAge + IncomeLog + MOSells_Occup + Boat_dum+ Z_IBI_AfterFirst + MO_Firstborn_dum + Z_MO_Num_OlderBro + 1)
+    
+    MCMCglmm( forml,
+        data=MUDat,
+        prior=priorAny,
+        family='categorical',
+        nitt = 10500000, thin = 10000, burnin = 500000,
+        pl=TRUE, pr=TRUE,
+        verbose=FALSE)
+})
+
+summary(Any)
+anytab<-data.frame(posterior.mode(Any$Sol), HPDinterval(Any$Sol,prob=0.90))
+AnyOR<-exp(Any$Sol) #transform to odds ratio scale for supplemental results
+TableSIany<-data.frame(posterior.mode(AnyOR), HPDinterval(AnyOR,prob=0.90))
+TableSIany$type<-rep("Any",8)
+TableSIany$variable<-rownames(TableSIany)
+names(TableSIany)[1]<-"mode"
+
+#R2 Any final model
+R2any<-as.data.frame(mcmcR2(Any))
+names(R2any)<-c("sigFany","R2many")
+anyR2fmode<-posterior.mode(R2any$R2many)
+anyR2fCI<-quantile(R2any$R2many,c(0.10,0.90))
+
+#Direct investment
+priorDir <- list(R = list(V = 1, fix=1),
+              B = list(mu = c(rep(0,7)), V = diag(7)*(4.3+pi^2/3)))
+
+system.time(Direct <- {
+  library(MCMCglmm)
+    forml<-as.formula(MU_Direct ~ Z_MOAge + IncomeLog + MOSells_Occup + Boat_dum + Z_AnnMove + Z_MO_Num_OlderBro + 1)
+
+    MCMCglmm( forml,
+        data=MUDat,
+        prior=priorDir,
+        family='categorical',
+        nitt = 10500000, thin = 10000, burnin = 500000,
+        pl=TRUE, pr=TRUE,
+        verbose=FALSE)
+})
+
+summary(Direct)
+dirtab<-data.frame(posterior.mode(Direct$Sol), HPDinterval(Direct$Sol,prob=0.90))
+DirectOR<-exp(Direct$Sol) #transform to odds ratio scale for Table S4
+TableSIdirect<-data.frame(posterior.mode(DirectOR), HPDinterval(DirectOR,prob=0.90))
+TableSIdirect$type<-rep("Direct",7)
+TableSIdirect$variable<-rownames(TableSIdirect)
+names(TableSIdirect)[1]<-"mode"
+
+#R2 Direct final model
+R2direct<-as.data.frame(mcmcR2(Direct))
+names(R2direct)<-c("sigFdir","R2mdir")
+dirR2fmode<-posterior.mode(R2direct$R2mdir)
+dirR2fCI<-quantile(R2direct$R2mdir,c(0.10,0.90))
+
+#Indirect investment
+priorInd <- list(R = list(V = 1, fix=1),
+              B = list(mu = c(rep(0,6)), V = diag(6)*(4.3+pi^2/3)))
+
+system.time(Indirect <- {
+  library(MCMCglmm)
+    forml<-as.formula(MU_Indirect_dum ~Z_MOAge + IncomeLog+ MO_LostChild_dum + Z_IBI_AfterFirst + MO_Firstborn_dum + 1)
+
+    MCMCglmm( forml,
+        data=MUDat,
+        prior=priorInd,
+        family='categorical',
+        nitt = 10500000, thin = 10000, burnin = 500000,
+        pl=TRUE, pr=TRUE,
+        verbose=FALSE)
+})
+
+
+summary(Indirect)
+indtab<-data.frame(posterior.mode(Indirect$Sol), HPDinterval(Indirect$Sol,prob=0.90))
+IndirectOR<-exp(Indirect$Sol) #transform to odds ratio scale for Table S4
+TableSIindirect<-data.frame(posterior.mode(IndirectOR), HPDinterval(IndirectOR,prob=0.90))
+TableSIindirect$type<-rep("Indirect",6)
+TableSIindirect$variable<-rownames(TableSIindirect)
+names(TableSIindirect)[1]<-"mode"
+
+#R2 Indirect final model
+R2indirect<-as.data.frame(mcmcR2(Indirect))
+names(R2indirect)<-c("sigFind","R2mind")
+indR2fmode<-posterior.mode(R2indirect$R2mind)
+indR2fCI<-quantile(R2indirect$R2mind,c(0.10,0.90))
+
+#Table S4
+TableSI<-rbind(TableSIany,TableSIdirect,TableSIindirect)
+
+```
+
+Coefficient dot plots show Bayesian posterior modes and 90% credible intervals.Figures 1-3
+
+```{r dotplots}
+
+library(ggplot2)
+
+#Figure 1
+rownames(dirtab)<-c("Intercept","Mother's age (z)", "Household income (log)", "Mother sells goods", "Household lives on a boat","Number of annual movements (z)"  ,"Mother's no. of older brothers (z)")
+dirtab$variable<-rownames(dirtab)
+dirplot<-dirtab[-c(1), ]
+names(dirplot)[1]<-"coefficient"
+dirdotplot<-ggplot(data = dirplot, aes(x = variable, y = coefficient, ymin = lower, ymax = upper)) 
+dirdotplot +  geom_point(size=2.5,position = position_dodge(width = 0.65)) +
+  geom_errorbar(position = position_dodge(width = 0.65), width = 0.4)  + ylim(-3.5,4.5) + ylab("Coefficient") + xlab(NULL) + ggtitle("Log Odds of Direct MU Investment") +theme_minimal() + geom_hline(yintercept=0) + coord_flip()
+
+#Figure 2
+rownames(indtab)<-c("Intercept","Mother's age (z)", "Household income (log)", "Mother has lost a child", "IBI after first birth (z)", "Mother was firstborn")
+indtab$variable<-rownames(indtab)
+indplot<-indtab[-c(1), ]
+names(indplot)[1]<-"coefficient"
+inddotplot<-ggplot(data = indplot, aes(x = variable, y = coefficient, ymin = lower, ymax = upper)) 
+inddotplot +  geom_point(size=2.5,position = position_dodge(width = 0.65)) +
+  geom_errorbar(position = position_dodge(width = 0.65), width = 0.4)  + ylab("Coefficient") + xlab(NULL) + ggtitle("Log Odds of Indirect MU Investment") +theme_minimal() + geom_hline(yintercept=0) + coord_flip()
+
+#Figure 3
+rownames(anytab)<-c("Intercept","Mother's age (z)", "Household income (log)", "Mother sells goods", "Household lives on a boat", "IBI after first birth (z)", "Mother was firstborn", "Mother's no. of older brothers (Z)")
+anytab$variable<-rownames(anytab)
+anyplot<-anytab[-c(1), ]
+names(anyplot)[1]<-"coefficient"
+anydotplot<-ggplot(data = anyplot, aes(x = variable, y = coefficient, ymin = lower, ymax = upper)) 
+anydotplot +  geom_point(size=2.5,position = position_dodge(width = 0.65)) +
+  geom_errorbar(position = position_dodge(width = 0.65), width = 0.4)  + ylim(-3.0,7.0) + ylab("Coefficient") + xlab(NULL) + ggtitle("Log Odds of Any MU Investment") +theme_minimal() + geom_hline(yintercept=0) + coord_flip()
+
+```
+
+Statistics for maternal uncles providing investment 
+
+```{r matunclestats}
+
+library(vcd)
+
+#subset to investing maternal uncles
+MUsub<-subset(MUDat, MU_InvestAny==1)
+
+#summary stats for numeric variables, Table 2
+stats2A<-apply(MUsub[ ,37:38],2,summary)
+Tab2A<-t(stats2A)
+Tab2ASD<-data.frame(apply(MUsub[ ,37:38],2,sd))
+colnames(Tab2ASD)<-"SD"
+Table2A<-cbind(Tab2A,Tab2ASD)
+
+#summary stats for dummy variables, Table 2
+Table2B<-apply(MUsub[ ,39:52],2,table)
+Tab2B<-t(Table2B)
+colnames(Tab2B)<-c("No", "Yes")
+
+
+#mosaic plots, Figure 4
+mosaic(MU_Direct ~ MU_BirthOrder, data=MUsub, set_labels=list(MU_Direct = c("No", "Yes"))) #direct
+
+mosaic(MU_Indirect_dum ~ MU_BirthOrder, data=MUsub, set_labels=list(MU_Indirect_dum = c("No", "Yes"))) #indirect
+
+```
